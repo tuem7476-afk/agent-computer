@@ -51,12 +51,6 @@ export class Computer extends withWorkspace(
       : [],
   }),
 ) {}
-  // computerd 从容器内向 DO 发起 /ws 升级建 capnweb 会话，交给容器后端处理
-  override async fetch(request: Request): Promise<Response> {
-    if (this.containerBackend) return this.containerBackend.handleFetch(request);
-    return new Response("container backend not configured", { status: 501 });
-  }
-}
 
 // ── HTTP 层 ──
 
