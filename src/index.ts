@@ -13,12 +13,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { withWorkspace, getWorkspace, type DurableObjectStorageLike, type WorkspaceHandle } from "@cloudflare/computer";
 import { WorkerShellBackend, WorkspaceFsAdapter, type WorkerShellLoader } from "@cloudflare/computer/backends/worker-shell";
-import { CloudflareContainerBackend, withWorkspaceContainer } from "@cloudflare/computer/backends/container";
 import { Bash, NetworkAccessDeniedError, defineCommand, type SecureFetch } from "just-bash";
 
 // isolate shell 的动态 Worker 通过这个服务代理回连本 Worker 的 Workspace，必须从入口导出；
 // WorkspaceProxy 则是容器出网的回环绑定（ctx.exports 按入口导出解析），容器模式必需
-export { WorkspaceServiceProxy, WorkspaceProxy } from "@cloudflare/computer";
+export { WorkspaceServiceProxy } from "@cloudflare/computer";
 
 type Env = {
   Computer: DurableObjectNamespace;
@@ -34,39 +33,24 @@ class ComputerBase extends DurableObject<Env> {
   get doEnv() { return this.env; }
 }
 
-// 容器宿主层：wrangler.jsonc 里打开 containers 配置后，容器会挂在这个 DO 上
-//（ctx.container 出现），此时构造容器后端——computerd 跑在容器里，文件系统
-// 与 DO 硬盘经包内置的 capnweb 会话双向同步，命令看到的就是同一块盘。
-// 没挂容器（免费部署）时这里什么都不做，零开销。
-class ComputerContainerHost extends withWorkspaceContainer(ComputerBase) {
-  readonly containerBackend = (this.doCtx as { container?: unknown }).container
-    ? new CloudflareContainerBackend({
-        container: () => this,
-        workspace: { binding: "Computer", id: this.doCtx.id.toString() },
-        // 容器内命令直连外网（真 Linux 模式的网络是全功能的，README 有说明）
-        egress: { mode: "direct" },
-      })
-    : null;
-}
-
 export class Computer extends withWorkspace(
-  ComputerContainerHost,
+  ComputerBase,
   (self) => ({
-    // workers-types 与包内自带类型对 SQL Row 的泛型声明有出入，运行时同物
     storage: self.doCtx.storage as unknown as DurableObjectStorageLike,
-    backends: self.containerBackend
-      ? [self.containerBackend]
-      : self.doEnv.LOADER
-        ? [
-            new WorkerShellBackend({
-              loader: self.doEnv.LOADER,
-              workspace: { binding: "Computer", id: self.doCtx.id.toString() },
-              ctx: self.doCtx,
-            }),
-          ]
-        : [],
+    backends: self.doEnv.LOADER
+      ? [
+          new WorkerShellBackend({
+            loader: self.doEnv.LOADER,
+            workspace: {
+              binding: "Computer",
+              id: self.doCtx.id.toString(),
+            },
+            ctx: self.doCtx,
+          }),
+        ]
+      : [],
   }),
-) {
+) {}
   // computerd 从容器内向 DO 发起 /ws 升级建 capnweb 会话，交给容器后端处理
   override async fetch(request: Request): Promise<Response> {
     if (this.containerBackend) return this.containerBackend.handleFetch(request);
